@@ -1,30 +1,27 @@
-"""
-main.py
-
-Streamlit app for the grounded RAG PDF/Word summarizer.
-
-Flow:
-    1. Upload PDF/Word -> extract text (doc_loader.py) -> detect language
-    2. User picks how much of the document to summarize (%)
-    3. Grounded summary generated (grounded_summarizer.py, via Modal) with
-       per-section citations back to source page/excerpt
-    4. User reviews the summary and confirms before moving to audio
-    5. User picks audio language + voice
-    6. If audio language != summary language, translate via Modal first
-    7. Route to ElevenLabs (English) or YarnGPT via Modal (Yoruba/Igbo/Hausa)
-"""
-
 import base64
 import os
 import tempfile
 
 import requests
 import streamlit as st
+from dotenv import load_dotenv
 from langdetect import detect
 
-from doc_loader import DocumentExtractionError, UnsupportedFileTypeError, extract_document
+from doc_loader import (
+    DocumentExtractionError,
+    UnsupportedFileTypeError,
+    extract_document,
+)
+from docx_export import build_summary_docx
 from elevenlabs_tts import ElevenLabsTTSError, synthesize_with_elevenlabs
-from grounded_summarizer import GroundedSummarizerError, LANGUAGE_NAMES, generate_grounded_summary
+from grounded_summarizer import (
+    LANGUAGE_NAMES,
+    GroundedSummarizerError,
+    generate_grounded_summary,
+)
+from main_integration_snippet import log_document_outcome, require_signup
+
+load_dotenv()
 
 MODAL_TRANSLATE_URL = os.environ.get("MODAL_TRANSLATE_URL")
 MODAL_YARNGPT_URL = os.environ.get("MODAL_YARNGPT_URL")
@@ -32,18 +29,13 @@ RAG_AUTH_TOKEN = os.environ.get("RAG_AUTH_TOKEN")
 
 SUPPORTED_AUDIO_LANGUAGES = ["English", "Yoruba", "Igbo", "Hausa"]
 
-# Same voice list as modal_app.py's YARNGPT_VOICES — kept as a plain
-# constant here too since it's static data not worth a Modal round trip
-# just to list it. "yoruba_feamle1" / "hausa_feamle1" are typos in the
-# upstream YarnGPT2 model itself, not here — preserved as-is since they're
-# the actual required speaker_name values.
 YARNGPT_VOICES = {
     "yoruba": ["yoruba_male2", "yoruba_female2", "yoruba_feamle1"],
     "igbo": ["igbo_female2", "igbo_male2", "igbo_female1"],
     "hausa": ["hausa_feamle1", "hausa_female2", "hausa_male2", "hausa_male1"],
 }
 
-ELEVENLABS_VOICES = ["Rachel", "Adam", "Bella", "Antoni", "Josh"]
+ELEVENLABS_VOICES = ["Daniel", "Chris", "Bella", "Lilly", "Liam"]
 
 TOP_N_MIN, TOP_N_MAX = 3, 15
 
@@ -100,9 +92,11 @@ def reset_downstream_state():
         st.session_state.pop(key, None)
 
 
-def main():
+def main():  # sourcery skip: low-code-quality
     st.title("Grounded PDF/Word Summarizer")
     st.caption("Every summary section is traceable to the exact passage it came from.")
+
+    user_id = require_signup()
 
     uploaded_file = st.file_uploader("Upload a PDF or Word document", type=["pdf", "docx"])
 
@@ -139,15 +133,14 @@ def main():
 
     st.subheader("1. How much of the document should be summarized?")
     percentage = st.slider(
-        "Percentage of document to summarize", min_value=10, max_value=80, value=30, step=10
+        "Percentage of docum5ent to summarize", min_value=10, max_value=80, value=30, step=10
     )
 
     if st.button("Generate grounded summary"):
-        # Rough heuristic: pages get split into smaller chunks downstream,
-        # so scale up a bit from raw section count. Tune the *2 multiplier
-        # if summaries come out consistently too long/short for a given %.
         approx_chunks = round((percentage / 100) * len(segments) * 2)
         top_n = max(TOP_N_MIN, min(TOP_N_MAX, approx_chunks))
+        document_type = os.path.splitext(uploaded_file.name)[1].lstrip(".")
+        document_length_words = sum(len(seg.text.split()) for seg in segments)
 
         with st.spinner(
             "Ranking passages and generating the grounded summary... "
@@ -159,10 +152,35 @@ def main():
                 )
             except GroundedSummarizerError as e:
                 st.error(f"Summarization failed: {e}")
+                log_document_outcome(
+                    user_id,
+                    document_type=document_type,
+                    document_length_words=document_length_words,
+                    summarization_percentage=percentage,
+                    processing_success=False,
+                    error_type=str(e),
+                )
                 return
             except requests.RequestException as e:
                 st.error(f"Could not reach the summarization service: {e}")
+                log_document_outcome(
+                    user_id,
+                    document_type=document_type,
+                    document_length_words=document_length_words,
+                    summarization_percentage=percentage,
+                    processing_success=False,
+                    error_type=str(e),
+                )
                 return
+
+        log_document_outcome(
+            user_id,
+            document_type=document_type,
+            document_length_words=document_length_words,
+            summarization_percentage=percentage,
+            processing_success=True,
+            summary_language=language_name,
+        )
 
         st.session_state.summary_result = result
         st.session_state.confirmed = False
@@ -181,6 +199,13 @@ def main():
     st.markdown("**Citations — see exactly where each part came from:**")
     render_citations(result.sections)
 
+    st.download_button(
+        "Download summary (Word)",
+        data=build_summary_docx(uploaded_file.name, language_name, result),
+        file_name=f"summary_{os.path.splitext(uploaded_file.name)[0]}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+        
     st.subheader("3. Happy with this summary?")
     confirmed = st.checkbox(
         "Yes, I'm satisfied with this summary — let's make the audio",
@@ -236,6 +261,19 @@ def main():
                 return
 
         st.success("Audio ready!")
+
+        log_document_outcome(
+            user_id,
+            document_type=document_type,
+            document_length_words=document_length_words,
+            summarization_percentage=percentage,
+            processing_success=True,
+            summary_language=language_name,
+            audio_generated=True,
+            audio_language=audio_language,
+            voice_selected=voice,
+        )
+
         st.audio(audio_bytes, format=audio_format)
         st.download_button(
             "Download audio",
