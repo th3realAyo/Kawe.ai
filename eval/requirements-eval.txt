@@ -1,0 +1,6 @@
+# Extra packages for the evaluation scripts (on top of requirements.txt).
+rouge-score
+transformers
+sentencepiece
+protobuf
+torch

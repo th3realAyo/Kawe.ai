@@ -9,6 +9,9 @@ from math import ceil
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 WORDS_PER_MINUTE = 150
 
+# Bounds on how many passages the summarizer rewrites (see summary_top_n).
+TOP_N_MIN, TOP_N_MAX = 3, 15
+
 
 @dataclass(frozen=True)
 class SummaryMetrics:
@@ -44,3 +47,13 @@ def build_summary_metrics(source_words: int, summary_text: str) -> SummaryMetric
         compression_percentage=compression_percentage,
         estimated_listening_minutes=listening_minutes,
     )
+
+
+def summary_top_n(percentage: int, segment_count: int) -> int:
+    """How many passages to summarize for a requested summary percentage.
+
+    Roughly two passages per page are available, so the requested share of
+    those is used, clamped to [TOP_N_MIN, TOP_N_MAX] to bound cost.
+    """
+    approx_chunks = round((percentage / 100) * segment_count * 2)
+    return max(TOP_N_MIN, min(TOP_N_MAX, approx_chunks))

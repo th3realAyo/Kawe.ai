@@ -4,15 +4,17 @@ modal_app.py
 Modal application hosting the GPU-backed ML inference for the grounded
 RAG summarization pipeline.
 
-Exposes two authenticated HTTP endpoints, called by the Streamlit app
+Exposes three authenticated HTTP endpoints, called by the Streamlit app
 (hosted separately on a free Hugging Face Space):
 
     POST /embed        -> embeds a list of text chunks (BAAI/bge-base-en-v1.5)
     POST /summarize     -> grounded, per-chunk abstractive rewrite
                             (Llama-3.1-8B-Instruct, 4-bit quantized)
 
-A third endpoint for self-hosted TTS fallback (XTTS-v2) will be added
-in a later pass once this core RAG loop is confirmed working.
+    POST /translate     -> summary translation, same Llama model
+
+Speech synthesis is not hosted here: English uses ElevenLabs and
+Yoruba/Igbo/Hausa use the hosted YarnGPT API (see yarngpt_tts.py).
 
 Deploy with:
     modal deploy modal_app.py
@@ -26,9 +28,9 @@ Required Modal secrets (create once via `modal secret create ...`):
 
 import os
 from typing import List
-from fastapi import Header
 
 import modal
+from fastapi import Header
 
 # --------------------------------------------------------------------------
 # App + image definition
@@ -55,41 +57,6 @@ image = (
         "sentence-transformers==3.0.1",
         "fastapi[standard]==0.115.0",
         "pydantic==2.9.2",
-    )
-    .env({"HF_HOME": "/cache/huggingface"})
-)
-
-# Separate image for YarnGPT: it needs its own dependency set (outetts,
-# uroman, gdown) plus the yarngpt GitHub repo and WavTokenizer weights baked
-# in at build time. Kept isolated from the embed/summarize image so a
-# YarnGPT setup issue can't break the core RAG pipeline, and so the
-# Embedder/Summarizer containers don't carry unrelated weight.
-yarngpt_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git", "wget")
-    .pip_install(
-        "torch==2.4.0",
-        "torchaudio==2.4.0",
-        "transformers==4.46.1",  # outetts 0.2.3 requires >=4.46.1; the 4.44.2
-                                  # pin used in the base image conflicts here
-        "outetts==0.2.3",
-        "uroman",
-        "inflect",
-        "numpy",
-        "gdown",
-        "fastapi[standard]==0.115.0",
-        "pydantic==2.9.2",
-    )
-    .run_commands(
-        # Clone the yarngpt repo to get its `audiotokenizer` module — it
-        # isn't published on PyPI, so this is the model author's documented
-        # way to use it (see saheedniyi/YarnGPT2 model card).
-        "git clone https://github.com/saheedniyi02/yarngpt.git /root/yarngpt_src",
-        # WavTokenizer config + checkpoint, used to encode/decode audio.
-        "wget -O /root/wavtokenizer_config.yaml "
-        "https://huggingface.co/novateur/WavTokenizer-medium-speech-75token/resolve/main/"
-        "wavtokenizer_mediumdata_frame75_3s_nq1_code4096_dim512_kmeans200_attn.yaml",
-        "gdown 1-ASeEkrn4HY49yZWHTASgfGFNXdVnLTt -O /root/wavtokenizer_model.ckpt",
     )
     .env({"HF_HOME": "/cache/huggingface"})
 )
@@ -143,16 +110,6 @@ class TranslateRequest(BaseModel):
 
 class TranslateResponse(BaseModel):
     translated_text: str
-
-
-class YarnGPTRequest(BaseModel):
-    text: str
-    language: str  # "english" | "yoruba" | "igbo" | "hausa"
-    speaker_name: str  # see YARNGPT_VOICES below for valid values per language
-
-
-class YarnGPTResponse(BaseModel):
-    audio_base64: str  # WAV audio, base64-encoded (JSON has no native binary type)
 
 
 # --------------------------------------------------------------------------
@@ -318,80 +275,6 @@ class Summarizer:
         )
         return TranslateResponse(translated_text=translated)
 
-YARNGPT_VOICES = {
-    "english": ["idera", "chinenye", "jude", "emma", "umar", "joke", "zainab", "osagie", "remi", "tayo"],
-    "yoruba": ["yoruba_male2", "yoruba_female2", "yoruba_feamle1"],
-    "igbo": ["igbo_female2", "igbo_male2", "igbo_female1"],
-    "hausa": ["hausa_feamle1", "hausa_female2", "hausa_male2", "hausa_male1"],
-}
 
-
-@app.cls(
-    image=yarngpt_image,
-    gpu="A10G",
-    scaledown_window=120,
-    volumes={"/cache": hf_cache_volume},
-    secrets=[rag_secret],
-    timeout=600,
-)
-class YarnGPTSynthesizer:
-    @modal.enter()
-    def load_model(self):
-        import sys
-
-        sys.path.insert(0, "/root/yarngpt_src")  # makes the cloned repo importable
-
-        import torch
-        from transformers import AutoModelForCausalLM
-        from yarngpt.audiotokenizer import AudioTokenizerV2
-
-        tokenizer_path = "saheedniyi/YarnGPT2"
-        self.audio_tokenizer = AudioTokenizerV2(
-            tokenizer_path,
-            "/root/wavtokenizer_model.ckpt",
-            "/root/wavtokenizer_config.yaml",
-        )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            tokenizer_path, torch_dtype="auto"
-        ).to(self.audio_tokenizer.device)
-
-    @modal.method()
-    def synthesize(self, text: str, language: str, speaker_name: str) -> bytes:
-        import io
-
-        import torchaudio
-
-        valid_voices = YARNGPT_VOICES.get(language.lower(), [])
-        if speaker_name not in valid_voices:
-            raise ValueError(
-                f"'{speaker_name}' isn't a valid voice for language '{language}'. "
-                f"Valid options: {valid_voices}"
-            )
-
-        prompt = self.audio_tokenizer.create_prompt(
-            text, lang=language.lower(), speaker_name=speaker_name
-        )
-        input_ids = self.audio_tokenizer.tokenize_prompt(prompt)
-
-        output = self.model.generate(
-            input_ids=input_ids,
-            temperature=0.1,
-            repetition_penalty=1.1,
-            max_length=4000,
-        )
-        codes = self.audio_tokenizer.get_codes(output)
-        audio = self.audio_tokenizer.get_audio(codes)
-
-        buffer = io.BytesIO()
-        torchaudio.save(buffer, audio, sample_rate=24000, format="wav")
-        return buffer.getvalue()
-
-    @modal.fastapi_endpoint(method="POST")
-    def synthesize_endpoint(self, request: YarnGPTRequest, authorization: str = Header(None)):
-        import base64
-
-        _check_auth(authorization)
-        audio_bytes = self.synthesize.local(
-            request.text, request.language, request.speaker_name
-        )
-        return YarnGPTResponse(audio_base64=base64.b64encode(audio_bytes).decode("utf-8"))
+# Yoruba, Igbo and Hausa speech now comes from the hosted YarnGPT API
+# (yarngpt_tts.py), so no speech model is deployed here.

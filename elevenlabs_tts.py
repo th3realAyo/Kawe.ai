@@ -1,12 +1,3 @@
-"""
-elevenlabs_tts.py
-
-Thin wrapper around the ElevenLabs API — the primary TTS path, used when
-the requested audio language is English. Raises ElevenLabsTTSError on any
-failure (missing key, quota, API error) so main.py can catch it distinctly
-and show a clear message rather than a raw stack trace.
-"""
-
 import os
 
 from elevenlabs.client import ElevenLabs
@@ -14,12 +5,6 @@ from elevenlabs.client import ElevenLabs
 
 class ElevenLabsTTSError(Exception):
     """Raised when ElevenLabs synthesis fails for any reason."""
-
-
-# IDs for ElevenLabs' classic premade voices. If any of these error out as
-# "voice not found," check your ElevenLabs dashboard (Voice Library) —
-# voice availability has shifted over time and these may need updating to
-# whatever voice IDs are currently active on your account.
 VOICE_NAME_TO_ID = {
     "Daniel": "onwK4e9ZLuTAKqWW03F9",
     "Chris": "iP95p4xoKVk53GoZ742B",
@@ -27,7 +12,6 @@ VOICE_NAME_TO_ID = {
     "Lilly": "pFZP5JQG7iQjIQuC4Bku",
     "Liam": "TX3LPaxmHKxFdv7VOQHJ",
 }
-
 
 def synthesize_with_elevenlabs(text: str, voice_name: str = "Rachel") -> bytes:
     api_key = os.environ.get("ELEVENLABS_API_KEY")

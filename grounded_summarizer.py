@@ -20,7 +20,7 @@ from typing import List
 
 import requests
 
-from chunk_ranker import Chunk, DEFAULT_TOP_N, rank_chunks, split_into_chunks
+from chunk_ranker import DEFAULT_TOP_N, Chunk, rank_chunks, split_into_chunks
 
 
 class GroundedSummarizerError(Exception):
