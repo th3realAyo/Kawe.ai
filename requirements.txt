@@ -1,9 +1,3 @@
-# --- These run on the Streamlit / Hugging Face Space side only ---
-# Heavy ML packages (torch, transformers, sentence-transformers,
-# bitsandbytes, outetts, uroman, gdown) are NOT listed here — they belong
-# to modal_app.py's own image definitions and are installed inside Modal's
-# containers, not on the free HF Space.
-
 streamlit
 pdfplumber
 python-docx
@@ -14,3 +8,7 @@ networkx
 elevenlabs
 nltk
 num2words
+supabase
+cryptography
+python-dotenv
+soundfile

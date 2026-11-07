@@ -1,0 +1,4 @@
+# Igbo sentences from a Nigerian Igbo-language source, one per line (at least 8).
+# Use complete everyday sentences of 8-25 words, with correct tone marks/spelling.
+# Lines starting with # are ignored. Note where they came from below, for the paper:
+# Source: <publication or website, date>

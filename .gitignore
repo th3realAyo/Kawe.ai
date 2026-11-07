@@ -18,9 +18,36 @@ __pycache__/
 .env.*
 *.pem
 *.key
-credentials.json.venv/
+credentials.json
+.venv/
 __pycache__/
 *.pyc
 summarize_test.json
 translate_test.json
 .venv2/
+
+
+# Policies
+policies/*
+# Evaluation outputs: FLORES+ terms forbid re-hosting its text publicly,
+# and key.csv would reveal the blind rating answers.
+eval/results/translations.jsonl
+eval/listening_test/
+
+# Original B.Sc. report (personal details: keep out of the public repo)
+PDF TO AUDIO SUMMARIZATION MODEL CHAPTER 1 - 5.docx
+
+# LaTeX build files
+paper/*.aux
+paper/*.log
+paper/*.bbl
+paper/*.blg
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.out
+
+# Nigerian test documents (publishers own the copyright) and outputs containing their text
+eval/nigerian_docs/
+eval/results/corpus.jsonl
+eval/results/summaries.jsonl
+eval/results/grounding_sentences.jsonl

@@ -39,7 +39,7 @@ On Windows:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt streamlit numpy requests python-docx modal elevenlabs python-dotenv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m streamlit run main.py
 ```
 
@@ -50,12 +50,23 @@ The current local interface is being expanded to include the full Kàwé workflo
 Keep API credentials in environment variables or your deployment platform's secret manager. Do not commit them to the repository.
 
 ```env
+# Modal endpoints (printed by `modal deploy modal_app.py`)
 MODAL_EMBED_URL=
 MODAL_SUMMARIZE_URL=
-RAG_AUTH_TOKEN=
-ELEVENLABS_API_KEY=
-YARNGPT_API_KEY=
+MODAL_TRANSLATE_URL=
+RAG_AUTH_TOKEN=          # shared secret, must match the Modal secret
+
+# Text-to-speech
+ELEVENLABS_API_KEY=      # English voices
+YARNGPT_API_KEY=         # Yoruba, Igbo and Hausa voices, and English backup (yarngpt.ai)
+
+# User accounts and usage logging (Supabase)
+SUPABASE_URL=
+SUPABASE_SERVICE_KEY=
+DB_ENCRYPTION_KEY=       # generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
+
+Create the database tables by running `db-schema.sql` in the Supabase SQL editor.
 
 ## Status
 
