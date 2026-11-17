@@ -1,0 +1,23 @@
+# Secrets: never commit
+.env
+
+# Python environments and caches
+.venv*/
+venv/
+__pycache__/
+*.pyc
+
+# Original thesis and Office lock files
+PDF TO AUDIO SUMMARIZATION MODEL CHAPTER 1 - 5.docx
+~$*
+
+# Evaluation documents and rating packs stay on your computer
+eval/nigerian_docs/*.pdf
+eval/listening_test/
+
+
+/Claude outputs/*
+/policies/*
+/tests/*
+/paper/*
+/applications/*
