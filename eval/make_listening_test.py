@@ -1,28 +1,12 @@
-"""Step 5: build the rating packs for native speakers.
+"""Builds blinded rating packs for native speakers in eval/listening_test/<lang>/.
 
-For each language this creates a folder under eval/listening_test/ with:
-
-  clips/                  audio clips with random names (raters can't tell
-                          which voice made them). Up to --max-voices YarnGPT
-                          voices per language, taken from the live voice list.
-  audio_ratings.csv       one row per clip: naturalness and intelligibility, 1-5
-  translation_ratings.csv (Yoruba/Igbo/Hausa) one row per translated summary
-                          section: adequacy and fluency, 1-5. The two
-                          translation systems are mixed and hidden.
-  RATER_INSTRUCTIONS.md   what raters do
-
-Where the spoken text comes from (all Nigerian):
-  * Yoruba, Igbo, Hausa: sentences YOU collect from Nigerian-language
-    sources and save one per line in eval/native_sentences/yor.txt,
-    ibo.txt and hau.txt (see eval/README.md). Using text written by
-    native speakers means the ratings measure the voices, not translation
-    mistakes.
-  * English: sentences taken automatically from your Nigerian documents.
-
-The answer key goes to eval/listening_test/key.csv: keep it to yourself.
-
-Usage:
-    python eval/make_listening_test.py --sentences 8
+Each pack holds randomly named audio clips (up to --max-voices YarnGPT voices per language;
+ElevenLabs voices for English), audio_ratings.csv (naturalness, intelligibility, 1-5),
+translation_ratings.csv (adequacy, fluency, 1-5; the two translation systems are mixed)
+and the rater instructions. Yoruba, Igbo and Hausa clips read native-written sentences from
+eval/native_sentences/<lang>.txt, so ratings reflect the voices rather than translation errors;
+English clips read sentences from the test papers. The answer key (listening_test/key.csv)
+must not be shared with raters.
 """
 
 from __future__ import annotations
@@ -33,15 +17,9 @@ import random
 import re
 import uuid
 
-from common import (
-    EVAL_DIR,
-    LANGUAGES,
-    RESULTS_DIR,
-    load_env,
-    yarngpt_speak,
-    read_jsonl,
-    require_env,
-)
+from common import EVAL_DIR, LANGUAGES, RESULTS_DIR, ensure_nltk, load_env, read_jsonl, require_env
+
+from kawe.yarngpt_tts import synthesize as synthesize_yarngpt
 
 OUT_DIR = EVAL_DIR / "listening_test"
 NATIVE_DIR = EVAL_DIR / "native_sentences"
@@ -51,7 +29,7 @@ TRANSLATION_COLUMNS = ["item", "english", "translation", "adequacy_1_to_5", "flu
 
 
 def write_sheet(path, columns, rows):
-    with path.open("w", newline="", encoding="utf-8-sig") as f:  # -sig: opens cleanly in Excel
+    with path.open("w", newline="", encoding="utf-8-sig") as f:  # BOM so Excel detects UTF-8
         writer = csv.writer(f)
         writer.writerow(columns)
         writer.writerows(rows)
@@ -69,7 +47,7 @@ def native_sentences(lang: str, n: int):
 
 
 def english_sentences(n: int, rng: random.Random):
-    """Plain sentences of 8-30 words from the Nigerian documents' body text."""
+    """Plain 8-30 word sentences from the test papers."""
     from nltk.tokenize import sent_tokenize
 
     pool = []
@@ -99,26 +77,22 @@ def main():
     require_env("YARNGPT_API_KEY")
     rng = random.Random(args.seed)
 
-    import nltk
+    ensure_nltk()
 
-    for pkg in ("punkt", "punkt_tab"):
-        nltk.download(pkg, quiet=True)
-
-    # Check every input before spending any GPU time.
     texts = {lang: native_sentences(lang, args.sentences) for lang in LANGUAGES}
-    from yarngpt_tts import list_voices, voices_for_language
+    from kawe.yarngpt_tts import list_voices, voices_for_language
 
     catalogue = list_voices()
     plan = []
     for lang in LANGUAGES:
         voices = voices_for_language(LANGUAGES[lang]["name"], catalogue)
-        if len(voices) > args.max_voices:  # same random choice every run (seeded)
+        if len(voices) > args.max_voices:
             voices = sorted(random.Random(f"{args.seed}-{lang}").sample(voices, args.max_voices))
         print(f"{LANGUAGES[lang]['name']}: testing voices {', '.join(voices)}")
         plan += [(lang, "yarngpt", voice) for voice in voices]
     if not args.skip_english:
         require_env("ELEVENLABS_API_KEY")
-        from elevenlabs_tts import VOICE_NAME_TO_ID
+        from kawe.elevenlabs_tts import VOICE_NAME_TO_ID
 
         texts["eng"] = english_sentences(args.sentences, rng)
         plan += [("eng", "elevenlabs", voice) for voice in VOICE_NAME_TO_ID]
@@ -138,9 +112,9 @@ def main():
             for sentence in texts[lang]:
                 clip_id = uuid.UUID(int=rng.getrandbits(128)).hex[:8]
                 if engine == "yarngpt":
-                    audio, ext = yarngpt_speak(sentence["text"], voice)
+                    audio, ext, _ = synthesize_yarngpt(sentence["text"], voice)
                 else:
-                    from elevenlabs_tts import synthesize_with_elevenlabs
+                    from kawe.elevenlabs_tts import synthesize_with_elevenlabs
 
                     audio, ext = synthesize_with_elevenlabs(sentence["text"], voice_name=voice), "mp3"
                 (clip_dir / f"{clip_id}.{ext}").write_bytes(audio)
@@ -160,8 +134,6 @@ def main():
         if not translations:
             print(f"{lang}: no translations yet; run run_translation_eval.py first to add a translation sheet")
             continue
-        # Equal number of items from each translation system, then shuffled
-        # together so raters can't tell which system produced which item.
         systems = sorted({r["system"] for r in translations})
         per_system = args.translation_items // len(systems)
         chosen = []

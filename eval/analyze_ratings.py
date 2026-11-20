@@ -1,14 +1,6 @@
-"""Summarizes the native-speaker ratings.
-
-Raters return their sheets renamed with their initials, e.g.
-    eval/listening_test/yor/audio_ratings_AO.csv
-    eval/listening_test/yor/translation_ratings_AO.csv
-This script joins them with key.csv and reports the mean opinion score
-(MOS) with a 95% confidence interval for each voice and each translation
-system.
-
-Usage:
-    python eval/analyze_ratings.py
+"""Mean opinion scores with 95% confidence intervals from returned rating sheets.
+Expects files such as listening_test/yor/audio_ratings_AO.csv (rater initials in the name)
+and listening_test/key.csv from make_listening_test.py.
 """
 
 from __future__ import annotations
@@ -32,7 +24,7 @@ def read_csv(path):
 
 
 def mos(values):
-    """Mean with a normal-approximation 95% confidence interval."""
+    """Mean with a normal-approximation 95% interval."""
     if not values:
         return "–"
     mean = statistics.mean(values)

@@ -1,52 +1,16 @@
-# Corpus check: 20 usable of 40 documents
+# Test set: 0 of 7 files
 
-Read the first and last words of each reference summary. If one starts or ends in the wrong place, put its page numbers in the manifest's `summary_pages` column and run `python eval/prepare_corpus.py` again.
-
-| File | Found by | Summary words | Body words | Pages | Summary starts | Summary ends |
+| Paper | Abstract words | Body words | Body pages | Abstract starts | Abstract ends | Body starts |
 |---|---|---|---|---|---|---|
-| 1785165118_pdf_gokphfvesk.pdf | automatic | 235 | 3326 | 9 | The higher education sector in Nigeria is experiencing increasing pressures due to demographic growth, socio-economic … | … innovative, and globally competitive institutions that produce ethical leaders, critical thinkers, and socially responsible citizens. |
-| COMPARATIVE STUDY ON THE PREVALENCE OF TRYPANOSOMES AMONG CATTLE IN SELECTED ABATTOIRS AND CONFINED FEEDLOTS (FARMS) IN PARTS OF KADUNA STATE, NIGERIA.pdf | automatic | 201 | 15526 | 81 | The prevalence of trypanosome infection among cattle in selected abattoirs and confined feedlots (farms) in … | … except T. vivax. viii TABLE OF CONTENT Cover page-----------------------------------------------------------------------------------------------i Fly page-------------------------------------------------------------------------------------------------ii Title page-----------------------------------------------------------------------------------------------iii Declaration---------------------------------------------------------------------------------------------iv Certification---------------------------------------------------------------------------------------------v |
-| EKSU SCIENCE JOURNALVOLUME 1_compressed.pdf#p10-32 | automatic | 444 | 8235 | 23 | The study examined gender and resource use efficiency in Tomato production in Ayedire Local Government … | … in land ownership and access to credit to ensure equitable opportunities for female tomato farmers. |
-| EKSU SCIENCE JOURNALVOLUME 1_compressed.pdf#p33-46 | automatic | 240 | 4883 | 14 | Owing to its immunosuppressive effects on patients, diabetes mellitus predisposes individuals to candidal infections. Therefore, … | … least antifungal resistance, should therefore be included in the regimen of diabetic patients with candiduria. |
-| EKSU SCIENCE JOURNALVOLUME 1_compressed.pdf#p47-58 | automatic | 84 | 2242 | 10 | Various mathematical and standard epidemiological models have been proposed in studying infectious disease dynamics which … | … Nigeria. A deterministic analysis is performed and the estimated value of the basic reproduction number |
-| EKSU SCIENCE JOURNALVOLUME 1_compressed.pdf#p59-65 | automatic | 342 | 2447 | 7 | Hepatitis B virus (HBV) is a blood borne pathogen transmitted through parenteral (intravenous drug use) … | … infection which can be used in diagnosis of HBV infection. transmission is through contact with |
-| EKSU SCIENCE JOURNALVOLUME 1_compressed.pdf#p66-79 | automatic | 279 | 5314 | 14 | The study was conducted to determine the protein and amino acids content in three underutilized … | … serve as cheap sources of protein and amino acids in human nutrition especially L. taraxacifolia. |
-| EKSU SCIENCE JOURNALVOLUME 1_compressed.pdf#p80-91 | automatic | 170 | 3956 | 12 | The integration of smart technology into buildings has become a major trend in urban development. … | … the idea of smart buildings and it was recommended that more awareness should be done. |
-| EKSU SCIENCE JOURNALVOLUME 1_compressed.pdf#p92-109 | automatic | 245 | 5396 | 18 | Mobile Ad-Hoc Network (MANET) is a decentralized system that enables direct communication between mobile nodes … | … can be used to inform decision-making for protocol selection and optimization in various MANET scenarios. |
-| hpp papers for publication 11.pdf#p1-16 | automatic | 265 | 3355 | 13 | The research work examined the perceived influence of social media on health promotion outcomes among … | … to enhance health communication strategies and ensure access to credible health sources through social media. |
-| hpp papers for publication 11.pdf#p17-32 | automatic | 250 | 3694 | 15 | The study investigated factors influencing self-medication among undergraduate students of Nnamdi Azikiwe University Awka. Three … | … medication, utilizing campus media and peer support groups to spread information on safe medication practices. |
-| hpp papers for publication 11.pdf#p33-48 | automatic | 314 | 4111 | 15 | Stress is part of our everyday life and can have life threatening consequences when not … | … of worker in the healthcare system to avoid break down in health of the HCWs. |
-| hpp papers for publication 11.pdf#p49-68 | automatic | 257 | 4563 | 17 | The study was conducted to ascertain the knowledge of preventive measure of cholera disease among … | … and to be treated water before drinking, in order to decrease morbidity cause by cholera. |
-| hpp papers for publication 11.pdf#p69-79 | automatic | 167 | 2513 | 10 | The human body reacts to so many foreign particles known as allergy. Allergies are the … | … prepare for food allergy emergencies and provide professional development on food allergies for staff members. |
-| hpp papers for publication 11.pdf#p80-101 | automatic | 338 | 4767 | 17 | Background: Adequate frequency of handwashing is one of the non-curative interventions recommended to prevent any … | … that Nigerians should improve their daily frequency of handwashing to the recommended 6-10 times daily. |
-| hpp papers for publication 11.pdf#p102-114 | automatic | 197 | 2910 | 12 | Jaundice is one of the most common conditions needing medical attention in newborn babies. Jaundice … | … and the prompt step to take when neonatal jaundice is noticed should be made mandatory. |
-| hpp papers for publication 11.pdf#p115-124 | automatic | 164 | 2531 | 10 | This study investigates the relationship between environmental pollution and respiratory diseases in Awka South Local … | … that there is a strong correlation between waste burning and the occurrence of respiratory diseases. |
-| hpp papers for publication 11.pdf#p125-148 | automatic | 201 | 5563 | 21 | This study investigated socio-demographic indices of child sexual abuse among school children in Edo South … | … to educate students, parents, teachers, and community members about the risks of child sexual abuse. |
-| hpp papers for publication 11.pdf#p149-161 | automatic | 189 | 2301 | 10 | Healthcare services utilization is essential for longevity and health promotion. The presence of healthcare facilities … | … Awareness and Community Participation is crucial to improving healthcare utilization in rural areas of Nigeria. |
-| hpp papers for publication 11.pdf#p162-202 | automatic | 376 | 12908 | 41 | Clinical studies have demonstrated many therapeutic benefits of cannabis, which has been used for medicinal … | … and researchers, and contribute to the ongoing debate about legalization and medicinal use of cannabis. |
-
 
 ## Problems
 
 | File | Problem |
 |---|---|
-| cbn_fsr_dec2024.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\cbn_fsr_dec2024.pdf' |
-| cbn_macro_outlook_2026.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\cbn_macro_outlook_2026.pdf' |
-| nerc_annual_report_2025.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\nerc_annual_report_2025.pdf' |
-| ncdc_annual_report_2025.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\ncdc_annual_report_2025.pdf' |
-| mbnp_budget_implementation_q3_2016.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\mbnp_budget_implementation_q3_2016.pdf' |
-| nesg_macro_outlook_2026.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\nesg_macro_outlook_2026.pdf' |
-| nuprc_annual_report_2024.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\nuprc_annual_report_2024.pdf' |
-| budgit_state_finances_reforms.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\budgit_state_finances_reforms.pdf' |
-| budgit_subnational_spending.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\budgit_subnational_spending.pdf' |
-| bpsr_nspsr_2023.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\bpsr_nspsr_2023.pdf' |
-| abu_phd_phytochemical_2018.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\abu_phd_phytochemical_2018.pdf' |
-| abu_msc_press_coverage_2015_election.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\abu_msc_press_coverage_2015_election.pdf' |
-| abu_phd_internet_citizenship.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\abu_phd_internet_citizenship.pdf' |
-| abu_mphil_pension_oil_growth.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\abu_mphil_pension_oil_growth.pdf' |
-| abu_msc_nonoil_exports.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\abu_msc_nonoil_exports.pdf' |
-| lcu_phd_media_youth_politics.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\lcu_phd_media_youth_politics.pdf' |
-| ujah_nigerian_poetry_transition.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\ujah_nigerian_poetry_transition.pdf' |
-| naujilj_treaties_nigeria.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\naujilj_treaties_nigeria.pdf' |
-| naujilj_cybercrime_jurisdiction.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\naujilj_cybercrime_jurisdiction.pdf' |
-| eksu_gatekeeping_education.pdf | Failed to extract PDF: [Errno 2] No such file or directory: 'C:\\Users\\Benny\\Desktop\\petty_talk\\eval\\nigerian_docs\\eksu_gatekeeping_education.pdf' |
+| 1785165118_pdf_gokphfvesk.pdf | Failed to extract PDF: No module named 'pypdfium2' |
+| Are penalty shootouts better than a coin toss.pdf | Failed to extract PDF: No module named 'pypdfium2' |
+| Eight Things to Know about Large Language Models.pdf | Failed to extract PDF: No module named 'pypdfium2' |
+| Impact of AI Tools on Learning Outcomes - Decreasing Knowledge and Over-Reliance.pdf | Failed to extract PDF: No module named 'pypdfium2' |
+| Improving S&P 500 Volatility Forecasting through.pdf | Failed to extract PDF: No module named 'pypdfium2' |
+| NeurIPS-2025-beyond-the-surface-enhancing-llm-as-a-judge-alignment-with-human-via-internal-representations-Paper-Conference.pdf | Failed to extract PDF: No module named 'pypdfium2' |
+| Sentiment and Volatility in Financial Markets.pdf | Failed to extract PDF: No module named 'pypdfium2' |

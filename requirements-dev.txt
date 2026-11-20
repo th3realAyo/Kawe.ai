@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest==9.2.0
+# Reference implementations used by the tests (eval/baselines.py also needs scipy).
+networkx==3.7
+scipy==1.18.1

@@ -1,7 +1,10 @@
-# Extra packages for the evaluation scripts (on top of requirements.txt).
+pdfplumber
+nltk
 rouge-score
+scipy
+sacrebleu
+matplotlib
 transformers
 sentencepiece
 protobuf
 torch
-scipy

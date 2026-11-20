@@ -1,36 +1,31 @@
 """Client for the hosted YarnGPT text-to-speech API (https://yarngpt.ai/api-docs).
 
-Synthesis is a queued job: POST /api/v1/tts returns a job_id, and
-GET /api/v1/status/{job_id} is polled until it reports "completed" with a
-signed audio_url (valid about an hour) or "failed" with a user_message.
-
-The API has no language field. The text is spoken as given, so Kàwé
-translates the summary first and sends Yoruba/Igbo/Hausa text. Voices are
-looked up from GET /api/v1/voices because the catalogue changes over time;
-if that call fails, FALLBACK_VOICES is used.
+Synthesis is an asynchronous job: POST /api/v1/tts returns a job id, and
+GET /api/v1/status/{job_id} is polled until it completes with a signed audio URL.
+The API takes no language field, so text must already be in the target language.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
-import re
 import time
 from typing import Dict, List, Optional, Tuple
 
 import requests
 
-BASE_URL = os.environ.get("YARNGPT_BASE_URL", "https://api.yarngpt.ai")
-MAX_CHARS = 15_000  # API limit per request
-CHUNK_CHARS = 14_000  # leave headroom below the limit
+from kawe.text import split_text as _split_text
 
-# Voices available when this was written; used only if the live list fails.
+DEFAULT_BASE_URL = "https://api.yarngpt.ai"
+MAX_CHARS = 15_000  # API limit per request
+CHUNK_CHARS = 14_000
+
+# Used only when the live voice list cannot be fetched.
 FALLBACK_VOICES = [
     "umar", "osagie", "mary", "adaora", "zainab", "adam", "idera", "emma",
     "wura", "jude", "chinenye", "tayo", "regina", "femi", "nonso", "remi",
 ]
 
-# Language names/codes a voice entry might use, per Kàwé audio language.
 LANGUAGE_ALIASES = {
     "english": {"en", "eng", "english"},
     "yoruba": {"yo", "yor", "yoruba", "yorùbá"},
@@ -40,7 +35,11 @@ LANGUAGE_ALIASES = {
 
 
 class YarnGPTError(Exception):
-    """Raised when YarnGPT synthesis fails; the message is safe to show users."""
+    """Synthesis failed; the message is safe to show to users."""
+
+
+def _base_url() -> str:
+    return os.environ.get("YARNGPT_BASE_URL", DEFAULT_BASE_URL)
 
 
 def _api_key() -> str:
@@ -49,10 +48,8 @@ def _api_key() -> str:
         raise YarnGPTError("YARNGPT_API_KEY is not set.")
     return key
 
-
 def _headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {_api_key()}"}
-
 
 def _error_message(response: requests.Response) -> str:
     """The API's error body is {"error": {"code", "message", "user_message", ...}}."""
@@ -63,7 +60,6 @@ def _error_message(response: requests.Response) -> str:
         return f"{text} ({code})" if code else text
     except ValueError:
         return f"HTTP {response.status_code}: {response.text[:200]}"
-
 
 def _request(method: str, url: str, retries: int = 3, **kwargs) -> requests.Response:
     """Sends a request, waiting and retrying on rate limits and server errors."""
@@ -78,11 +74,6 @@ def _request(method: str, url: str, retries: int = 3, **kwargs) -> requests.Resp
             raise YarnGPTError(_error_message(response))
         return response
     raise YarnGPTError(_error_message(response))
-
-
-# ---------------------------------------------------------------------------
-# Voices
-# ---------------------------------------------------------------------------
 
 
 def _parse_voice(entry) -> Optional[dict]:
@@ -105,7 +96,7 @@ def _parse_voice(entry) -> Optional[dict]:
 def list_voices() -> List[dict]:
     """Live voice catalogue, or FALLBACK_VOICES if it can't be fetched."""
     try:
-        data = _request("GET", f"{BASE_URL}/api/v1/voices", headers=_headers(), retries=1).json()
+        data = _request("GET", f"{_base_url()}/api/v1/voices", headers=_headers(), retries=1).json()
     except (YarnGPTError, requests.RequestException, ValueError):
         return [{"id": v, "languages": None, "default": False} for v in FALLBACK_VOICES]
     if isinstance(data, dict):
@@ -115,8 +106,7 @@ def list_voices() -> List[dict]:
 
 
 def voices_for_language(language: str, voices: Optional[List[dict]] = None) -> List[str]:
-    """Voice ids that list the language. If the catalogue gives no language
-    information at all, every voice is returned."""
+    """Voices that list the language; all voices if the catalogue has no language data."""
     voices = voices if voices is not None else list_voices()
     aliases = LANGUAGE_ALIASES.get(language.lower(), {language.lower()})
     if not any(v["languages"] for v in voices):
@@ -125,38 +115,17 @@ def voices_for_language(language: str, voices: Optional[List[dict]] = None) -> L
     return matching or [v["id"] for v in voices]
 
 
-# ---------------------------------------------------------------------------
-# Synthesis
-# ---------------------------------------------------------------------------
-
-
 def split_text(text: str, max_chars: int = CHUNK_CHARS) -> List[str]:
     """Splits text at sentence ends into pieces under max_chars."""
-    text = " ".join(text.split())
-    if len(text) <= max_chars:
-        return [text] if text else []
-    chunks, current = [], ""
-    for sentence in re.split(r"(?<=[.!?])\s+", text):
-        while len(sentence) > max_chars:  # a single enormous "sentence"
-            chunks.append(sentence[:max_chars])
-            sentence = sentence[max_chars:]
-        if len(current) + len(sentence) + 1 > max_chars:
-            chunks.append(current)
-            current = sentence
-        else:
-            current = f"{current} {sentence}".strip()
-    if current:
-        chunks.append(current)
-    return chunks
+    return _split_text(text, max_chars)
 
 
 def _synthesize_chunk(text: str, voice: str, output_format: str, poll_seconds: float, timeout_seconds: float) -> Tuple[bytes, List[str]]:
     body = {"text": text, "voice": voice, "output_format": output_format}
-    # Same text + voice + format -> same key, so a retry never pays twice.
     idempotency_key = hashlib.sha256(f"{voice}|{output_format}|{text}".encode()).hexdigest()[:64]
     job = _request(
         "POST",
-        f"{BASE_URL}/api/v1/tts",
+        f"{_base_url()}/api/v1/tts",
         headers={**_headers(), "Idempotency-Key": idempotency_key},
         json=body,
     ).json()
@@ -165,7 +134,7 @@ def _synthesize_chunk(text: str, voice: str, output_format: str, poll_seconds: f
 
     deadline = time.monotonic() + timeout_seconds
     while True:
-        status = _request("GET", f"{BASE_URL}/api/v1/status/{job_id}", headers=_headers()).json()
+        status = _request("GET", f"{_base_url()}/api/v1/status/{job_id}", headers=_headers()).json()
         if status.get("status") == "completed":
             break
         if status.get("status") == "failed":
@@ -174,7 +143,7 @@ def _synthesize_chunk(text: str, voice: str, output_format: str, poll_seconds: f
             raise YarnGPTError(f"YarnGPT job {job_id} did not finish within {timeout_seconds:.0f} seconds.")
         time.sleep(poll_seconds)
 
-    # The signed link is the credential; don't send the API key to the storage host.
+    # The signed URL is the credential; the API key is not sent to the storage host.
     audio = requests.get(status["audio_url"], timeout=120)
     if audio.status_code >= 400 or not audio.content:
         raise YarnGPTError(f"Could not download the audio (HTTP {audio.status_code}).")
@@ -187,11 +156,7 @@ def synthesize(
     poll_seconds: float = 2.0,
     timeout_seconds: float = 600.0,
 ) -> Tuple[bytes, str, List[str]]:
-    """Speaks text with a YarnGPT voice.
-
-    Returns (audio_bytes, file_extension, warnings). Text within the API limit
-    comes back as one MP3. Longer text is sent in pieces as WAV and joined.
-    """
+    """Returns (audio_bytes, extension, warnings): one MP3, or joined WAV pieces for long text."""
     chunks = split_text(text)
     if not chunks:
         raise YarnGPTError("There is no text to speak.")
@@ -199,7 +164,7 @@ def synthesize(
         audio, warnings = _synthesize_chunk(chunks[0], voice, "mp3", poll_seconds, timeout_seconds)
         return audio, "mp3", warnings
 
-    from audio_utils import join_wav_clips
+    from kawe.audio import join_wav_clips
 
     clips, warnings = [], []
     for chunk in chunks:

@@ -1,14 +1,11 @@
-streamlit
-pdfplumber
-python-docx
-langdetect
-requests
-numpy
-networkx
-elevenlabs
-nltk
-num2words
-supabase
-cryptography
-python-dotenv
-soundfile
+# Streamlit app. Pinned to the versions the tests were last run with; modal_app.py pins the GPU image separately.
+streamlit==1.67.0
+pypdfium2==5.15.2
+python-docx==1.2.0
+langdetect==1.0.9
+requests==2.34.2
+numpy==2.5.5
+elevenlabs==2.79.0
+supabase==2.34.1
+python-dotenv==1.2.4
+soundfile==0.14.0

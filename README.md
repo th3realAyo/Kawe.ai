@@ -1,73 +1,85 @@
 # Kàwé
 
-**Read smart. Listen better.**
+Kàwé turns long PDF and Word documents into short summaries in which every section is linked to the passage it came from, and reads the summary aloud in English, Yoruba, Igbo or Hausa.
 
-Kàwé turns long documents into clear, listenable summaries. Upload a document, choose how much of it you want to keep, select an audio language and voice, then listen or download the result.
+## How it works
 
-It is designed for people who need to understand documents quickly without reading every page.
+1. **Extraction** (`kawe/extraction.py`): page text via PDFium, with running headers and page numbers removed. Word files (paragraphs and tables) are grouped into ~350-word sections that break at headings and are labelled with them, e.g. `Section 3 ("Methods")`. Scanned, image-only PDFs are not supported (no OCR).
+2. **Ranking** (`kawe/ranking.py`): the text is split into passages of whole sentences (at most 180 words; short tails are merged), embedded with the multilingual BGE-M3, and scored by PageRank centrality on the cosine-similarity graph. Passages are then picked by maximal marginal relevance, so near-duplicate central passages are not all chosen.
+3. **Grounded rewriting** (`kawe/summarizer.py`): each selected passage is rewritten on its own by Llama-3.1-8B-Instruct (bfloat16, greedy decoding) under a prompt that forbids content not in the passage; the passage is kept as the citation. All passages go to the GPU in one batched request.
+4. **Translation and speech**: sections are translated one at a time by the same model; English is voiced by ElevenLabs, Yoruba, Igbo and Hausa by YarnGPT.
 
-## What Kàwé does
+Model inference runs in one Modal GPU container (`modal_app.py`); the Streamlit app (`main.py`) calls its endpoints. Users sign in with an email address that is stored only as an irreversible keyed hash (see `kawe/db.py` and `policies/privacy-policy.md`).
 
-- Extracts text from PDF and Word documents
-- Produces concise, source-grounded summaries
-- Lets users control the desired summary length
-- Supports audio generation in selected languages
-- Offers a choice of available TTS voices
-- Lets users listen to or download generated audio
+## Project layout
 
-## Flow
-
-1. Upload a document
-2. Choose a summary length
-3. Select a summary or audio language
-4. Choose a voice
-5. Generate, listen to, and download the audio summary
-
-## Technology
-
-Kàwé uses Python and Streamlit for the app experience, document extraction tools for PDF and Word files, semantic ranking and language models for summarization, and text-to-speech providers such as YarnGPT and ElevenLabs for audio generation.
-
-## Local development
-
-From the project folder:
-
-```bash
-python -m venv .venv
+```
+main.py              Streamlit app
+modal_app.py         GPU endpoints: embed, summarize, translate
+kawe/                application package
+  extraction.py      PDF and Word text extraction
+  ranking.py         passage splitting and centrality ranking
+  summarizer.py      grounded summarization pipeline
+  modal_client.py    HTTP client for the Modal endpoints
+  limits.py          request limits and token checks enforced by the endpoints
+  text.py            sentence splitting
+  elevenlabs_tts.py  English speech
+  yarngpt_tts.py     Yoruba, Igbo and Hausa speech
+  audio.py           joining audio clips
+  export.py          Word downloads
+  metrics.py         upload limits and summary statistics
+  accounts.py, db.py email sign-in, account deletion, usage logging (Supabase)
+eval/                evaluation scripts (see eval/README.md)
+tests/               unit tests
+schema.sql           Supabase tables
 ```
 
-On Windows:
+## Setup
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m streamlit run main.py
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt   # app + test dependencies (requirements.txt is the app alone)
 ```
 
-The current local interface is being expanded to include the full Kàwé workflow: configurable summary length, document language handling, and provider/voice selection.
+Deploy the inference endpoints (needs `pip install modal` and the Modal secrets `hf-token` with `HF_TOKEN`, and `rag-auth-token` with `RAG_AUTH_TOKEN` and, for the evaluation, `EVAL_AUTH_TOKEN`):
 
-## Configuration
+```powershell
+modal deploy modal_app.py
+```
 
-Keep API credentials in environment variables or your deployment platform's secret manager. Do not commit them to the repository.
+The deploy prints four endpoint URLs. Create the database tables by running `schema.sql` in the Supabase SQL editor (it also enables row level security), then fill in `.env`:
 
 ```env
-# Modal endpoints (printed by `modal deploy modal_app.py`)
-MODAL_EMBED_URL=
-MODAL_SUMMARIZE_URL=
-MODAL_TRANSLATE_URL=
-RAG_AUTH_TOKEN=          # shared secret, must match the Modal secret
-
-# Text-to-speech
-ELEVENLABS_API_KEY=      # English voices
-YARNGPT_API_KEY=         # Yoruba, Igbo and Hausa voices, and English backup (yarngpt.ai)
-
-# User accounts and usage logging (Supabase)
+MODAL_EMBED_URL=             # .../inference-embed-endpoint...
+MODAL_SUMMARIZE_URL=         # .../inference-summarize-endpoint...
+MODAL_SUMMARIZE_BATCH_URL=   # .../inference-summarize-batch-endpoint...
+MODAL_TRANSLATE_URL=         # .../inference-translate-endpoint...
+RAG_AUTH_TOKEN=
+EVAL_AUTH_TOKEN=             # only needed to run the evaluation's whole-document baseline
+ELEVENLABS_API_KEY=
+YARNGPT_API_KEY=
 SUPABASE_URL=
 SUPABASE_SERVICE_KEY=
-DB_ENCRYPTION_KEY=       # generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+EMAIL_HASH_KEY=              # python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Create the database tables by running `db-schema.sql` in the Supabase SQL editor.
+Keep `EMAIL_HASH_KEY` secret and never change it: it is what makes stored email hashes irreversible, and a new key means no existing user can sign in again.
 
-## Status
+Run the app:
 
-Kàwé is actively being developed. The product direction is a secure document-to-summary-to-audio experience with flexible language and voice choices.
+```powershell
+streamlit run main.py
+```
+
+## Tests
+
+```powershell
+python -m pytest tests
+```
+
+GitHub Actions runs the same tests on every push (`.github/workflows/tests.yml`).
+
+## Evaluation
+
+See `eval/README.md`.

@@ -30,7 +30,7 @@ Pay attention to tones and pronunciation. A wrong tone that changes a word's mea
 
 ## 2. Translations (`translation_ratings.csv`, Yoruba/Igbo/Hausa only)
 
-Each row has a short English passage (one or two sentences from a summary of a Nigerian document) and a machine translation of it. Give two scores:
+Each row has a short English passage (one or two sentences from a document summary) and a machine translation of it. Give two scores:
 
 **Adequacy: how much of the English meaning is kept?** 5 = all of it, 4 = most, 3 = much, 2 = little, 1 = none or wrong meaning.
 

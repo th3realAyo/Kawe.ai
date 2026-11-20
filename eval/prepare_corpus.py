@@ -1,123 +1,68 @@
-"""Step 1: turn your Nigerian documents into a test set.
+"""Builds the test set from every PDF and Word file in eval/evaluation_papers.
 
-Put the documents (text-based PDF or .docx, not scans) in
-eval/nigerian_docs/ and list them in eval/nigerian_docs/manifest.csv
-(see manifest_template.csv). Every document must contain its own summary
-written by its authors: an "Executive Summary" (reports) or an "Abstract"
-(theses, journal articles). That summary becomes the human reference; it
-is removed from the text Kàwé summarizes, so Kàwé can't copy it.
+Each paper's own abstract is the reference summary. The text Kàwé summarizes is
+the body after the abstract, up to the reference list; the front matter, the
+abstract itself, references and appendices are excluded. The body is extracted
+with the app's own extractor, so the evaluation sees exactly what users see.
 
-The script finds the summary automatically from its heading. Always check
-eval/results/corpus_review.md afterwards: if a summary was found wrongly,
-fill in the summary_pages column of the manifest (e.g. "3-5") and run
-again. Those pages are then used as the reference and left out of the body.
+Also records, per paper, how the app's extractor (PDFium) compares with the
+previous one (pdfplumber), for the extraction analysis.
 
-A journal issue holding several articles can be listed once per article,
-with the article's page range in the `pages` column (e.g. "33-46"). Page
-numbers in `pages` and `summary_pages` are the PDF's own page numbers.
-
-Usage:
-    python eval/prepare_corpus.py
+Writes results/corpus.jsonl, results/extraction.jsonl and results/corpus_review.md.
 """
 
 from __future__ import annotations
 
-import csv
-import functools
 import re
+import time
+from pathlib import Path
 from typing import List, Optional, Tuple
 
-from common import EVAL_DIR, RESULTS_DIR, markdown_table
+from common import PAPERS_DIR, RESULTS_DIR, markdown_table, write_jsonl
 
-DOCS_DIR = EVAL_DIR / "nigerian_docs"
-MANIFEST = DOCS_DIR / "manifest.csv"
-CORPUS = RESULTS_DIR / "corpus.jsonl"
+from kawe.extraction import extract_document
 
 MIN_BODY_WORDS = 1500
-MIN_SUMMARY_WORDS = 60
-MAX_SUMMARY_WORDS = 3000
+MIN_ABSTRACT_WORDS = 60
+MAX_ABSTRACT_WORDS = 600
+LONG_TOKEN_CHARS = 25  # tokens longer than this are almost always words fused by lost spaces
 
-SUMMARY_START = re.compile(r"(?im)^[ \t]*(executive\s+summary|abstract)\b[ \t.:\-–]*")
-# Headings that usually come right after an abstract or executive summary.
-SUMMARY_END = re.compile(
+ABSTRACT_START = re.compile(r"(?im)^[ \t]*(?:abstract|executive\s+summary)\b[ \t.:\-–—]*")
+ABSTRACT_END = re.compile(
     r"(?im)^[ \t]*("
-    r"key\s*words?|index\s+terms|"
-    r"(?:1\.0|1\.?|i\.|chapter\s+(?:one|1))?\s*introduction|"
-    r"chapter\s+(?:one|1)\b|"
-    r"table\s+of\s+contents?|contents\s*$|"
-    r"acknowledge?ments?|dedication|"
-    r"(?:1\.0|1\.)\s*background|background\s+(?:of|to)\s+the\s+study|"
-    r"list\s+of\s+(?:tables|figures|abbreviations|acronyms)"
+    r"key\s*words?|index\s+terms|jel\s+classification|"
+    r"(?:1\.0|1\.?|i\.)?\s*introduction|"
+    r"chapter\s+(?:one|1)\b|table\s+of\s+contents?|contents\s*$|"
+    r"acknowledge?ments?|(?:1\.0|1\.)\s*background|background\s+(?:of|to)\s+the\s+study"
     r")\b"
+    r"|^[ \t]*(?:[∗*†‡§¶]|contact\s+author|corresponding\s+author|arxiv:\d)"  # first-page footnotes
 )
-REFERENCES = re.compile(r"(?im)^[ \t]*(references|bibliography|works\s+cited)[ \t:]*$")
+FOOTNOTE_LINE = re.compile(r"^\s*(?:[∗*†‡§¶]|arxiv:\d)", re.IGNORECASE)
+REFERENCES = re.compile(r"(?im)^[ \t]*(?:\d+\.?\s*)?(references|bibliography|works\s+cited)[ \t:]*$")
 
 
-@functools.lru_cache(maxsize=None)
-def _read_pages_cached(path_str: str) -> Tuple[Tuple[str, str], ...]:
-    """Each file is parsed once, even when a journal issue is listed once per article."""
-    return tuple(read_pages(path_str))
-
-
-def read_pages(path) -> List[Tuple[str, str]]:
-    """Returns (label, text) per page. PDFs use the app's own extractor. For
-    Word files the paragraphs are grouped into the same ~350-word
-    "Section N" pseudo-pages as the app, but line breaks between paragraphs
-    are kept so headings like "ABSTRACT" can be found."""
-    from doc_loader import WORDS_PER_PSEUDO_PAGE, extract_document
-
-    if str(path).lower().endswith(".docx"):
-        import docx
-
-        paragraphs = [p.text.strip() for p in docx.Document(str(path)).paragraphs if p.text.strip()]
-        pages, current, words = [], [], 0
-        for para in paragraphs:
-            current.append(para)
-            words += len(para.split())
-            if words >= WORDS_PER_PSEUDO_PAGE:
-                pages.append((f"Section {len(pages) + 1}", "\n".join(current)))
-                current, words = [], 0
-        if current:
-            pages.append((f"Section {len(pages) + 1}", "\n".join(current)))
-        return pages
-    return [(seg.location_label, seg.text) for seg in extract_document(str(path))]
-
-
-def parse_pages(spec: str) -> Optional[set]:
-    """'3-5' or '2,4' -> {3,4,5} / {2,4} (1-based)."""
-    spec = (spec or "").strip()
-    if not spec:
-        return None
-    pages = set()
-    for part in spec.split(","):
-        a, _, b = part.strip().partition("-")
-        pages.update(range(int(a), int(b or a) + 1))
-    return pages
-
-
-def find_summary(full_text: str) -> Optional[Tuple[int, int]]:
-    """Character span of the abstract / executive summary body, or None."""
-    for start_match in SUMMARY_START.finditer(full_text):
-        start = start_match.end()
-        # Skip table-of-contents entries like "Executive Summary ........ iv".
-        line_end = full_text.find("\n", start_match.start())
-        heading_line = full_text[start_match.start() : line_end if line_end != -1 else None]
-        if re.search(r"\.{4,}|\s(\d{1,3}|[ivxlc]{1,6})\s*$", heading_line, re.IGNORECASE):
-            continue
-        end_match = SUMMARY_END.search(full_text, start + 200)
-        end = end_match.start() if end_match else len(full_text)
-        words = len(full_text[start:end].split())
-        if words > MAX_SUMMARY_WORDS:  # no clear end: take a capped prefix
-            end = start + len(" ".join(full_text[start:].split()[:MAX_SUMMARY_WORDS]))
-        if len(full_text[start:end].split()) >= MIN_SUMMARY_WORDS:
-            return start, end
+def find_abstract(text: str) -> Optional[Tuple[int, int, int]]:
+    """(heading start, abstract start, abstract end) character offsets, or None."""
+    for match in ABSTRACT_START.finditer(text):
+        line_end = text.find("\n", match.start())
+        heading = text[match.start() : line_end if line_end != -1 else None]
+        if re.search(r"\.{4,}|\s(\d{1,3}|[ivxlc]{1,6})\s*$", heading, re.IGNORECASE):
+            continue  # table-of-contents entry
+        start = match.end()
+        end_match = ABSTRACT_END.search(text, start + 200)
+        end = end_match.start() if end_match else len(text)
+        words = text[start:end].split()
+        if len(words) > MAX_ABSTRACT_WORDS:
+            end = start + len(" ".join(text[start:].split()[:MAX_ABSTRACT_WORDS]))
+            words = text[start:end].split()
+        if len(words) >= MIN_ABSTRACT_WORDS:
+            return match.start(), start, end
     return None
 
 
-def strip_references(pages: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
-    """Drops the reference list if it starts in the last 40% of the document."""
-    cutoff = int(len(pages) * 0.6)
-    for i in range(len(pages) - 1, cutoff - 1, -1):
+def cut_references(pages: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    """Drops the reference list and everything after it (appendices, checklists)."""
+    for i in range(int(len(pages) * 0.25), len(pages)):
         match = REFERENCES.search(pages[i][1])
         if match:
             kept = pages[:i] + [(pages[i][0], pages[i][1][: match.start()])]
@@ -125,114 +70,110 @@ def strip_references(pages: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     return pages
 
 
-def build_record(row: dict) -> dict:
-    path = DOCS_DIR / row["file"]
-    numbered = list(enumerate(_read_pages_cached(str(path)), 1))  # (PDF page number, (label, text))
-    page_range = parse_pages(row.get("pages", ""))
-    if page_range:
-        numbered = [(i, page) for i, page in numbered if i in page_range]
-        if not numbered:
-            raise ValueError(f"pages {row['pages']} are outside this file")
-    pages = [page for _, page in numbered]
-    manual = parse_pages(row.get("summary_pages", ""))
+def split_paper(segments) -> dict:
+    offsets, full = [], ""
+    for seg in segments:
+        offsets.append((len(full), seg.location_label))
+        full += seg.text + "\n"
+    span = find_abstract(full)
+    if not span:
+        raise ValueError("no Abstract heading found")
+    heading_start, start, end = span
 
-    if manual:
-        reference = " ".join(text for i, (_, text) in numbered if i in manual)
-        body_pages = [(label, text) for i, (label, text) in numbered if i not in manual]
-        method = f"manual (pages {row['summary_pages']})"
-    else:
-        # Join pages, remembering where each starts, so the summary can be cut
-        # out of whichever page(s) it sits on.
-        offsets, full = [], ""
-        for label, text in pages:
-            offsets.append((len(full), label))
-            full += text + "\n"
-        span = find_summary(full)
-        if not span:
-            raise ValueError("no 'Abstract' or 'Executive Summary' heading found; set summary_pages")
-        start, end = span
-        reference = full[start:end]
-        heading_start = full.rfind("\n", 0, start) + 1  # remove the heading line too
-        body_pages = []
-        for k, (page_start, label) in enumerate(offsets):
-            page_end = offsets[k + 1][0] if k + 1 < len(offsets) else len(full)
-            text = full[page_start:page_end]
-            cut_a, cut_b = max(heading_start, page_start), min(end, page_end)
-            if cut_a < cut_b:
-                text = text[: cut_a - page_start] + text[cut_b - page_start :]
-            if text.strip():
-                body_pages.append((label, text.strip()))
-        method = "automatic"
-
-    body_pages = strip_references(body_pages)
-    reference = " ".join(reference.split())
-    body_words = sum(len(text.split()) for _, text in body_pages)
-    doc_id = row["file"] + (f"#p{row['pages'].strip()}" if (row.get("pages") or "").strip() else "")
+    pages = []
+    for k, (page_start, label) in enumerate(offsets):
+        page_end = offsets[k + 1][0] if k + 1 < len(offsets) else len(full)
+        lo = max(page_start, end)  # keep only text after the abstract
+        if lo < page_end:
+            text = full[lo:page_end].strip()
+            if text:
+                pages.append((label, text))
+    pages = cut_references(pages)
+    if pages:  # first-page footnotes (author contacts, arXiv stamp) end up at the top of the body
+        label, text = pages[0]
+        text = "\n".join(line for line in text.split("\n") if not FOOTNOTE_LINE.match(line))
+        pages = ([(label, text)] if text.strip() else []) + pages[1:]
     return {
-        "doc_id": doc_id,
-        "title": row.get("title", ""),
-        "source": row.get("source", ""),
-        "genre": row.get("genre", ""),
-        "year": row.get("year", ""),
-        "reference": reference,
-        "reference_method": method,
-        "pages": [{"label": label, "text": text} for label, text in body_pages],
-        "body_words": body_words,
+        "front_matter": " ".join(full[:heading_start].split()),
+        "reference": " ".join(full[start:end].split()),
+        "pages": [{"label": label, "text": text} for label, text in pages],
     }
 
 
-def main():
-    if not MANIFEST.exists():
-        raise SystemExit(
-            f"Create {MANIFEST} first (copy eval/manifest_template.csv) and put the documents in {DOCS_DIR}."
-        )
-    with MANIFEST.open(encoding="utf-8-sig") as f:
-        rows = [r for r in csv.DictReader(f) if r.get("file", "").strip()]
+def extraction_stats(path: Path) -> dict:
+    """Word counts and fused-token rates for PDFium (app) and pdfplumber (previous extractor)."""
+    import pdfplumber
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    records, review_rows, problems = [], [], []
-    for row in rows:
+    from kawe.extraction import clean_page_text, read_pdf_pages
+
+    def stats(texts: List[str], seconds: float) -> dict:
+        tokens = " ".join(texts).split()
+        long_tokens = sum(len(t) > LONG_TOKEN_CHARS for t in tokens)
+        return {"words": len(tokens), "fused_tokens": long_tokens, "fused_rate": long_tokens / max(len(tokens), 1), "seconds": seconds}
+
+    start = time.perf_counter()
+    pdfium_pages = [clean_page_text(p) for p in read_pdf_pages(str(path))]
+    pdfium = stats(pdfium_pages, time.perf_counter() - start)
+    start = time.perf_counter()
+    with pdfplumber.open(str(path)) as pdf:
+        plumber_pages = [page.extract_text() or "" for page in pdf.pages]
+    plumber = stats(plumber_pages, time.perf_counter() - start)
+    return {"pages": len(pdfium_pages), "pdfium": pdfium, "pdfplumber": plumber}
+
+
+def doc_id_for(path: Path) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", path.stem.lower()).strip("-")[:48]
+
+
+def main():
+    files = sorted(p for p in PAPERS_DIR.iterdir() if p.suffix.lower() in {".pdf", ".docx"})
+    if not files:
+        raise SystemExit(f"No PDF or Word files in {PAPERS_DIR}")
+
+    records, extraction, review, problems = [], [], [], []
+    for path in files:
         try:
-            record = build_record(row)
-        except Exception as e:  # report every problem at once, don't stop
-            problems.append([row["file"] + (f" (p{row['pages']})" if row.get("pages") else ""), str(e)])
+            start = time.perf_counter()
+            segments = extract_document(str(path))
+            extract_seconds = time.perf_counter() - start
+            parts = split_paper(segments)
+        except Exception as e:
+            problems.append([path.name, str(e)])
             continue
-        if record["body_words"] < MIN_BODY_WORDS:
-            problems.append([record["doc_id"], f"only {record['body_words']} words of body text (need {MIN_BODY_WORDS}+)"])
+        body_words = sum(len(p["text"].split()) for p in parts["pages"])
+        if body_words < MIN_BODY_WORDS:
+            problems.append([path.name, f"only {body_words} body words"])
             continue
+        record = {
+            "doc_id": doc_id_for(path),
+            "file": path.name,
+            "front_matter": parts["front_matter"][:400],
+            "reference": parts["reference"],
+            "pages": parts["pages"],
+            "body_words": body_words,
+            "source_pages": len(segments),
+            "extract_seconds": round(extract_seconds, 3),
+        }
         records.append(record)
-        words = record["reference"].split()
-        review_rows.append([
-            record["doc_id"],
-            record["reference_method"],
-            len(words),
-            record["body_words"],
-            len(record["pages"]),
-            " ".join(words[:15]) + " …",
-            "… " + " ".join(words[-15:]),
+        if path.suffix.lower() == ".pdf":
+            extraction.append({"doc_id": record["doc_id"], **extraction_stats(path)})
+        ref = record["reference"].split()
+        review.append([
+            record["doc_id"], len(ref), body_words, len(record["pages"]),
+            " ".join(ref[:12]) + " …", "… " + " ".join(ref[-12:]),
+            record["pages"][0]["text"][:60].replace("\n", " ") + " …",
         ])
 
-    import json
-
-    with CORPUS.open("w", encoding="utf-8") as f:
-        for record in records:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-    review = [
-        f"# Corpus check: {len(records)} usable of {len(rows)} documents\n",
-        "Read the first and last words of each reference summary. If one starts or ends in the "
-        "wrong place, put its page numbers in the manifest's `summary_pages` column and run "
-        "`python eval/prepare_corpus.py` again.\n",
-        markdown_table(
-            ["File", "Found by", "Summary words", "Body words", "Pages", "Summary starts", "Summary ends"],
-            review_rows,
-        ),
+    write_jsonl(RESULTS_DIR / "corpus.jsonl", records)
+    write_jsonl(RESULTS_DIR / "extraction.jsonl", extraction)
+    report = [
+        f"# Test set: {len(records)} of {len(files)} files\n",
+        markdown_table(["Paper", "Abstract words", "Body words", "Body pages", "Abstract starts", "Abstract ends", "Body starts"], review),
     ]
     if problems:
-        review += ["\n\n## Problems\n", markdown_table(["File", "Problem"], problems)]
-    (RESULTS_DIR / "corpus_review.md").write_text("\n".join(review) + "\n", encoding="utf-8")
-    print("\n".join(review))
-    print(f"\nSaved {len(records)} documents to {CORPUS}")
+        report += ["\n## Problems\n", markdown_table(["File", "Problem"], problems)]
+    (RESULTS_DIR / "corpus_review.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+    print("\n".join(report))
 
 
 if __name__ == "__main__":

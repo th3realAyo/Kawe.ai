@@ -1,87 +1,62 @@
-"""
-modal_app.py
+"""GPU inference endpoints for Kàwé, deployed with `modal deploy modal_app.py`.
 
-Modal application hosting the GPU-backed ML inference for the grounded
-RAG summarization pipeline.
+One container on one A10G serves every endpoint, so a document pays for one cold start:
 
-Exposes three authenticated HTTP endpoints, called by the Streamlit app
-(hosted separately on a free Hugging Face Space):
+POST embed_endpoint            bge-m3 passage embeddings (multilingual)
+POST summarize_endpoint        passage-constrained rewrite of one passage
+POST summarize_batch_endpoint  the same rewrite for many passages, generated as a batch
+POST translate_endpoint        translation
 
-    POST /embed        -> embeds a list of text chunks (BAAI/bge-base-en-v1.5)
-    POST /summarize     -> grounded, per-chunk abstractive rewrite
-                            (Llama-3.1-8B-Instruct, 4-bit quantized)
+The language model is Llama-3.1-8B-Instruct in bfloat16 (~16 GB, fits the A10G's 24 GB).
 
-    POST /translate     -> summary translation, same Llama model
-
-Speech synthesis is not hosted here: English uses ElevenLabs and
-Yoruba/Igbo/Hausa use the hosted YarnGPT API (see yarngpt_tts.py).
-
-Deploy with:
-    modal deploy modal_app.py
-
-Required Modal secrets (create once via `modal secret create ...`):
-    hf-token        -> HF_TOKEN            (Hugging Face token with access
-                                             to the gated meta-llama/Llama-3.1-8B-Instruct repo)
-    rag-auth-token  -> RAG_AUTH_TOKEN      (shared secret the Streamlit app
-                                             must send in the Authorization header)
+Required Modal secrets:
+  hf-token        HF_TOKEN, access to the gated Llama repo
+  rag-auth-token  RAG_AUTH_TOKEN, the bearer token the app sends; optionally also
+                  EVAL_AUTH_TOKEN, a second token that alone may replace the system prompt
+                  and send whole documents (used by the evaluation's baselines)
 """
 
 import os
-from typing import List
+from typing import List, Optional
 
 import modal
 from fastapi import Header
+from pydantic import BaseModel
 
-# --------------------------------------------------------------------------
-# App + image definition
-# --------------------------------------------------------------------------
+EMBED_MODEL = "BAAI/bge-m3"
+LLM_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+GENERATION_BATCH_SIZE = 8
 
-app = modal.App("pdf-rag-summarizer")
-rag_secret = modal.Secret.from_name("rag-auth-token")
+GROUNDING_SYSTEM_PROMPT = (
+    "You are a precise summarization assistant. You will be given a single "
+    "passage extracted from a larger document. Summarize ONLY the "
+    "information contained in that passage, in 1-3 concise sentences. "
+    "Do not add facts, context, or interpretation that is not explicitly "
+    "present in the passage. Do not speculate. Respond in {language}."
+)
+TRANSLATION_SYSTEM_PROMPT = (
+    "You are a precise translation assistant. Translate the following text "
+    "into {language}. Preserve the original meaning exactly — do not "
+    "summarize, expand, or add commentary. Respond with ONLY the "
+    "translated text, nothing else."
+)
 
+app = modal.App("kawe")
+hf_cache_volume = modal.Volume.from_name("hf-cache", create_if_missing=True)  # keeps weights across cold starts
 
-# Persists downloaded model weights across container restarts. Without
-# this, every cold start re-downloads Llama-3.1-8B (~16GB) from Hugging
-# Face from scratch, which is what was causing every chunk to time out.
-hf_cache_volume = modal.Volume.from_name("hf-cache", create_if_missing=True)
-
-# Single image shared by both GPU classes. Kept in one image for simplicity;
-# split into two images later if cold-start size becomes an issue.
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "torch==2.4.0",
         "transformers==4.44.2",
         "accelerate==0.33.0",
-        "bitsandbytes==0.43.3",
         "sentence-transformers==3.0.1",
         "fastapi[standard]==0.115.0",
         "pydantic==2.9.2",
     )
     .env({"HF_HOME": "/cache/huggingface"})
+    .add_local_python_source("kawe")  # for kawe.limits; the package's other modules are imported lazily
 )
-
-# --------------------------------------------------------------------------
-# Auth helper
-# --------------------------------------------------------------------------
-# Simple shared-secret check so the public Modal endpoint can't be called by
-# anyone other than the Streamlit app. Not full OAuth-grade auth, but
-# sufficient for a single-frontend internal API.
-
-
-def _check_auth(authorization: str | None) -> None:
-    from fastapi import HTTPException
-
-    expected = os.environ["RAG_AUTH_TOKEN"]
-    if not authorization or authorization.removeprefix("Bearer ") != expected:
-        raise HTTPException(status_code=401, detail="Invalid or missing auth token")
-
-
-# --------------------------------------------------------------------------
-# Request/response schemas
-# --------------------------------------------------------------------------
-
-from pydantic import BaseModel
 
 
 class EmbedRequest(BaseModel):
@@ -95,186 +70,157 @@ class EmbedResponse(BaseModel):
 class SummarizeRequest(BaseModel):
     text: str
     max_new_tokens: int = 120
-    language: str = "English"  # e.g. "English", "French" — matches detected doc language
+    language: str = "English"
+    instruction: Optional[str] = None  # replaces the grounding prompt; evaluation token only
 
 
 class SummarizeResponse(BaseModel):
     summary: str
+    instruction_used: bool = False
+
+
+class SummarizeBatchRequest(BaseModel):
+    texts: List[str]
+    max_new_tokens: int = 120
+    language: str = "English"
+
+
+class SummarizeBatchResponse(BaseModel):
+    summaries: List[str]
 
 
 class TranslateRequest(BaseModel):
     text: str
-    target_language: str  # full name, e.g. "English", "Yoruba"
-    max_new_tokens: int = 300
+    target_language: str
+    max_new_tokens: int = 512
 
 
 class TranslateResponse(BaseModel):
     translated_text: str
 
 
-# --------------------------------------------------------------------------
-# Embedding model: BAAI/bge-base-en-v1.5
-# --------------------------------------------------------------------------
+def _authorize(authorization: Optional[str]) -> str:
+    from fastapi import HTTPException
+
+    from kawe.limits import RequestRejected, caller_role
+
+    try:
+        return caller_role(authorization, os.environ.get("RAG_AUTH_TOKEN"), os.environ.get("EVAL_AUTH_TOKEN"))
+    except RequestRejected as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+def _validate(check, *args) -> None:
+    from fastapi import HTTPException
+
+    from kawe.limits import RequestRejected
+
+    try:
+        check(*args)
+    except RequestRejected as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
 @app.cls(
     image=image,
     gpu="A10G",
-    scaledown_window=120,
+    scaledown_window=300,
+    secrets=[modal.Secret.from_name("hf-token"), modal.Secret.from_name("rag-auth-token")],
     volumes={"/cache": hf_cache_volume},
-    timeout=600,
-    secrets=[rag_secret]
+    timeout=900,
 )
-class Embedder:
+class Inference:
     @modal.enter()
-    def load_model(self):
+    def load_models(self):
+        import torch
         from sentence_transformers import SentenceTransformer
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        self.model = SentenceTransformer("BAAI/bge-base-en-v1.5", device="cuda")
+        self.embedder = SentenceTransformer(EMBED_MODEL, device="cuda", model_kwargs={"torch_dtype": torch.float16})
+        self.embedder.max_seq_length = 512  # passages are at most ~300 tokens
+
+        token = os.environ["HF_TOKEN"]
+        self.tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL, token=token)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.tokenizer.padding_side = "left"  # decoder-only batched generation
+        self.model = AutoModelForCausalLM.from_pretrained(LLM_MODEL, torch_dtype=torch.bfloat16, device_map="cuda", token=token)
+        self.model.eval()
+
+    def _generate(self, system_prompt: str, texts: List[str], max_new_tokens: int) -> List[str]:
+        """Greedy decoding with the chat template, in batches of GENERATION_BATCH_SIZE."""
+        import torch
+
+        outputs: List[str] = []
+        for start in range(0, len(texts), GENERATION_BATCH_SIZE):
+            prompts = [
+                self.tokenizer.apply_chat_template(
+                    [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                for text in texts[start : start + GENERATION_BATCH_SIZE]
+            ]
+            # The chat template already starts with <|begin_of_text|>.
+            inputs = self.tokenizer(prompts, return_tensors="pt", padding=True, add_special_tokens=False).to(self.model.device)
+            with torch.no_grad():
+                output_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    temperature=None,
+                    top_p=None,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                )
+            prompt_length = inputs["input_ids"].shape[-1]
+            outputs += [self.tokenizer.decode(ids[prompt_length:], skip_special_tokens=True).strip() for ids in output_ids]
+        return outputs
 
     @modal.method()
     def embed(self, texts: List[str]) -> List[List[float]]:
-        # bge models recommend a query/passage prefix convention; for pure
-        # passage-importance scoring (no separate query), embedding the raw
-        # passage text directly is the right call here.
-        vectors = self.model.encode(texts, normalize_embeddings=True)
-        return vectors.tolist()
+        return self.embedder.encode(texts, batch_size=32, normalize_embeddings=True).tolist()
+
+    @modal.method()
+    def summarize(self, text: str, max_new_tokens: int = 120, language: str = "English", instruction: Optional[str] = None) -> str:
+        system_prompt = instruction or GROUNDING_SYSTEM_PROMPT.format(language=language)
+        return self._generate(system_prompt, [text], max_new_tokens)[0]
+
+    @modal.method()
+    def summarize_batch(self, texts: List[str], max_new_tokens: int = 120, language: str = "English") -> List[str]:
+        return self._generate(GROUNDING_SYSTEM_PROMPT.format(language=language), texts, max_new_tokens)
+
+    @modal.method()
+    def translate(self, text: str, target_language: str, max_new_tokens: int = 512) -> str:
+        return self._generate(TRANSLATION_SYSTEM_PROMPT.format(language=target_language), [text], max_new_tokens)[0]
 
     @modal.fastapi_endpoint(method="POST")
     def embed_endpoint(self, request: EmbedRequest, authorization: str = Header(None)):
-        _check_auth(authorization)
-        vectors = self.embed.local(request.texts)
-        return EmbedResponse(embeddings=vectors)
+        from kawe.limits import check_embed
 
-
-# --------------------------------------------------------------------------
-# Abstractive rewriting model: Llama-3.1-8B-Instruct (4-bit quantized)
-# --------------------------------------------------------------------------
-
-GROUNDING_SYSTEM_PROMPT = (
-    "You are a precise summarization assistant. You will be given a single "
-    "passage extracted from a larger document. Summarize ONLY the "
-    "information contained in that passage, in 1-3 concise sentences. "
-    "Do not add facts, context, or interpretation that is not explicitly "
-    "present in the passage. Do not speculate. Respond in {language}."
-)
-
-# Reuses the same loaded Llama-3.1-8B-Instruct model as summarization —
-# translation is just a different prompt, not a different model, so this
-# adds zero extra GPU memory or cold-start cost on top of the Summarizer
-# container that's already running.
-TRANSLATION_SYSTEM_PROMPT = (
-    "You are a precise translation assistant. Translate the following text "
-    "into {language}. Preserve the original meaning exactly — do not "
-    "summarize, expand, or add commentary. Respond with ONLY the "
-    "translated text, nothing else."
-)
-
-
-@app.cls(
-    image=image,
-    gpu="A10G",
-    scaledown_window=120,
-    secrets=[modal.Secret.from_name("hf-token"), rag_secret],
-    volumes={"/cache": hf_cache_volume},
-    timeout=900,  # generous headroom for a cold first-ever download of ~16GB
-)
-class Summarizer:
-    @modal.enter()
-    def load_model(self):
-        import torch
-        from transformers import (
-            AutoModelForCausalLM,
-            AutoTokenizer,
-            BitsAndBytesConfig,
-        )
-
-        model_id = "meta-llama/Llama-3.1-8B-Instruct"
-        hf_token = os.environ["HF_TOKEN"]
-
-        quant_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_quant_type="nf4",
-        )
-
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id, token=hf_token)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            quantization_config=quant_config,
-            device_map="auto",
-            token=hf_token,
-        )
-
-    @modal.method()
-    def summarize(self, text: str, max_new_tokens: int = 120, language: str = "English") -> str:
-        import torch
-
-        messages = [
-            {"role": "system", "content": GROUNDING_SYSTEM_PROMPT.format(language=language)},
-            {"role": "user", "content": text},
-        ]
-        prompt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-
-        with torch.no_grad():
-            output_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,  # deterministic, favors grounding over creativity
-                temperature=None,
-                top_p=None,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
-
-        generated = output_ids[0][inputs["input_ids"].shape[-1]:]
-        return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+        _authorize(authorization)
+        _validate(check_embed, request.texts)
+        return EmbedResponse(embeddings=self.embed.local(request.texts))
 
     @modal.fastapi_endpoint(method="POST")
     def summarize_endpoint(self, request: SummarizeRequest, authorization: str = Header(None)):
-        _check_auth(authorization)
-        summary = self.summarize.local(
-            request.text, request.max_new_tokens, request.language
-        )
-        return SummarizeResponse(summary=summary)
+        from kawe.limits import check_summarize
 
-    @modal.method()
-    def translate(self, text: str, target_language: str, max_new_tokens: int = 300) -> str:
-        import torch
+        role = _authorize(authorization)
+        _validate(check_summarize, request.text, request.max_new_tokens, request.language, request.instruction, role)
+        summary = self.summarize.local(request.text, request.max_new_tokens, request.language, request.instruction)
+        return SummarizeResponse(summary=summary, instruction_used=bool(request.instruction))
 
-        messages = [
-            {
-                "role": "system",
-                "content": TRANSLATION_SYSTEM_PROMPT.format(language=target_language),
-            },
-            {"role": "user", "content": text},
-        ]
-        prompt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+    @modal.fastapi_endpoint(method="POST")
+    def summarize_batch_endpoint(self, request: SummarizeBatchRequest, authorization: str = Header(None)):
+        from kawe.limits import check_summarize_batch
 
-        with torch.no_grad():
-            output_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
-
-        generated = output_ids[0][inputs["input_ids"].shape[-1]:]
-        return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+        _authorize(authorization)
+        _validate(check_summarize_batch, request.texts, request.max_new_tokens, request.language)
+        return SummarizeBatchResponse(summaries=self.summarize_batch.local(request.texts, request.max_new_tokens, request.language))
 
     @modal.fastapi_endpoint(method="POST")
     def translate_endpoint(self, request: TranslateRequest, authorization: str = Header(None)):
-        _check_auth(authorization)
-        translated = self.translate.local(
-            request.text, request.target_language, request.max_new_tokens
-        )
-        return TranslateResponse(translated_text=translated)
+        from kawe.limits import check_translate
 
-
-# Yoruba, Igbo and Hausa speech now comes from the hosted YarnGPT API
-# (yarngpt_tts.py), so no speech model is deployed here.
+        _authorize(authorization)
+        _validate(check_translate, request.text, request.target_language, request.max_new_tokens)
+        return TranslateResponse(translated_text=self.translate.local(request.text, request.target_language, request.max_new_tokens))
