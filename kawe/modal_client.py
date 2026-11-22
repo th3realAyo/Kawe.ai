@@ -95,6 +95,12 @@ def summarize_batch(texts: List[str], language: str = "English", max_new_tokens:
     return summaries
 
 
+def answer(question: str, passages: List[str], max_new_tokens: int = 200) -> str:
+    """Grounded answer in English citing passages as [1], [2], ...; "NOT_FOUND" if they don't answer it."""
+    payload = {"question": question, "passages": passages, "max_new_tokens": max_new_tokens}
+    return _field(_post("MODAL_ANSWER_URL", payload, timeout=300), "answer", "MODAL_ANSWER_URL")
+
+
 def translation_token_budget(text: str) -> int:
     """Output tokens to allow for a translation.
 

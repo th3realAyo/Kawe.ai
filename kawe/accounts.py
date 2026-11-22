@@ -107,6 +107,8 @@ def log_document_outcome(
     audio_generated: bool = False,
     audio_language: Optional[str] = None,
     voice_selected: Optional[str] = None,
+    event_type: str = "summary",
+    question_answered: Optional[bool] = None,
 ) -> None:
     """Records a usage event. Failures are logged and never interrupt the user."""
     now = datetime.datetime.now()
@@ -122,6 +124,8 @@ def log_document_outcome(
             audio_generated=audio_generated,
             audio_language=audio_language,
             voice_selected=voice_selected,
+            event_type=event_type,
+            question_answered=question_answered,
             time_of_day=now.strftime("%H:%M"),
             day_of_week=now.strftime("%A"),
         )

@@ -9,6 +9,8 @@ Kàwé turns long PDF and Word documents into short summaries in which every sec
 3. **Grounded rewriting** (`kawe/summarizer.py`): each selected passage is rewritten on its own by Llama-3.1-8B-Instruct (bfloat16, greedy decoding) under a prompt that forbids content not in the passage; the passage is kept as the citation. All passages go to the GPU in one batched request.
 4. **Translation and speech**: sections are translated one at a time by the same model; English is voiced by ElevenLabs, Yoruba, Igbo and Hausa by YarnGPT.
 
+5. **Ask the document (prototype, `kawe/qa.py`)**: after a summary, a question in English, Yoruba, Igbo or Hausa is translated to English, matched against the summary's passage embeddings (top 3 above a similarity floor), and answered under a prompt that allows only what those passages say, citing them as [1], [2]. If nothing relevant is found, or the model replies NOT_FOUND, the app says "This document doesn't say." The answer is translated back and can be played aloud. Questions and answers are never stored; only the fact that a question was asked, and whether it was answered, is logged. The similarity floor (`MIN_SIMILARITY`) is a first guess still to be calibrated.
+
 Model inference runs in one Modal GPU container (`modal_app.py`); the Streamlit app (`main.py`) calls its endpoints. Users sign in with an email address that is stored only as an irreversible keyed hash (see `kawe/db.py` and `policies/privacy-policy.md`).
 
 ## Project layout
@@ -21,6 +23,7 @@ kawe/                application package
   ranking.py         passage splitting and centrality ranking
   summarizer.py      grounded summarization pipeline
   modal_client.py    HTTP client for the Modal endpoints
+  qa.py              ask-the-document prototype: retrieval and grounded answers
   limits.py          request limits and token checks enforced by the endpoints
   text.py            sentence splitting
   elevenlabs_tts.py  English speech
@@ -48,13 +51,14 @@ Deploy the inference endpoints (needs `pip install modal` and the Modal secrets 
 modal deploy modal_app.py
 ```
 
-The deploy prints four endpoint URLs. Create the database tables by running `schema.sql` in the Supabase SQL editor (it also enables row level security), then fill in `.env`:
+The deploy prints five endpoint URLs. Create the database tables by running `schema.sql` in the Supabase SQL editor (it also enables row level security), then fill in `.env`:
 
 ```env
 MODAL_EMBED_URL=             # .../inference-embed-endpoint...
 MODAL_SUMMARIZE_URL=         # .../inference-summarize-endpoint...
 MODAL_SUMMARIZE_BATCH_URL=   # .../inference-summarize-batch-endpoint...
 MODAL_TRANSLATE_URL=         # .../inference-translate-endpoint...
+MODAL_ANSWER_URL=            # .../inference-answer-endpoint... (ask-the-document prototype)
 RAG_AUTH_TOKEN=
 EVAL_AUTH_TOKEN=             # only needed to run the evaluation's whole-document baseline
 ELEVENLABS_API_KEY=

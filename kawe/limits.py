@@ -72,6 +72,18 @@ def check_summarize_batch(texts: List[str], max_new_tokens: int, language: str) 
     _check(0 < len(language) <= MAX_LANGUAGE_CHARS, "Invalid language.", status_code=422)
 
 
+MAX_QUESTION_CHARS = 1000
+MAX_ANSWER_PASSAGES = 5
+MAX_ANSWER_TOKENS = 400
+
+
+def check_answer(question: str, passages: List[str], max_new_tokens: int) -> None:
+    _check(0 < len(question) <= MAX_QUESTION_CHARS, f"Question must be between 1 and {MAX_QUESTION_CHARS} characters.")
+    _check(0 < len(passages) <= MAX_ANSWER_PASSAGES, f"Send between 1 and {MAX_ANSWER_PASSAGES} passages.")
+    _check(all(0 < len(p) <= MAX_PASSAGE_CHARS for p in passages), f"Each passage must be 1 to {MAX_PASSAGE_CHARS} characters.")
+    _check(0 < max_new_tokens <= MAX_ANSWER_TOKENS, f"max_new_tokens must be between 1 and {MAX_ANSWER_TOKENS}.", status_code=422)
+
+
 def check_translate(text: str, target_language: str, max_new_tokens: int) -> None:
     _check(0 < len(text) <= MAX_TRANSLATE_CHARS, f"Text must be between 1 and {MAX_TRANSLATE_CHARS} characters.")
     _check(0 < max_new_tokens <= MAX_TRANSLATE_TOKENS, f"max_new_tokens must be between 1 and {MAX_TRANSLATE_TOKENS}.", status_code=422)

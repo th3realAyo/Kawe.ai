@@ -21,6 +21,8 @@ create table if not exists usage_events (
     audio_generated boolean default false,
     audio_language text,
     voice_selected text,
+    event_type text not null default 'summary',  -- 'summary' or 'question'; question text is never stored
+    question_answered boolean,                  -- for questions: whether the document answered it
     time_of_day text,
     day_of_week text,
     created_at timestamptz not null default now()
@@ -41,3 +43,7 @@ alter table usage_events enable row level security;
 --     alter table users add constraint users_email_hash_key unique (email_hash);
 --     alter table users drop column username_encrypted;
 -- Then run the two "enable row level security" lines above.
+
+-- Adding the ask-the-document prototype to an existing database:
+--     alter table usage_events add column if not exists event_type text not null default 'summary';
+--     alter table usage_events add column if not exists question_answered boolean;

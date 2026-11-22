@@ -66,6 +66,9 @@ class GroundedSummaryResult:
     skipped_chunks: int = 0
     total_chunks: int = 0
     timings: Dict[str, float] = field(default_factory=dict)
+    # Every passage of the document and, when ranking ran, its embedding; reused for questions.
+    chunks: List[Chunk] = field(default_factory=list)
+    vectors: Optional[List[List[float]]] = None
 
 
 def clean_summary(text: str) -> str:
@@ -182,6 +185,7 @@ def generate_grounded_summary(
 
     timings: Dict[str, float] = {}
     scores: Dict[int, float] = {}
+    vectors = None
     if len(chunks) <= top_n:
         selected = sorted(chunks, key=lambda c: c.order)
     else:
@@ -213,4 +217,6 @@ def generate_grounded_summary(
         skipped_chunks=skipped,
         total_chunks=len(chunks),
         timings=timings,
+        chunks=list(chunks),
+        vectors=vectors,
     )

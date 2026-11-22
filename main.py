@@ -34,6 +34,7 @@ from kawe.metrics import (
     validate_upload_size,
 )
 from kawe.modal_client import ModalServiceError, translate
+from kawe.qa import QuestionError, answer_question, build_index
 from kawe.ranking import split_into_chunks
 from kawe.summarizer import (
     LANGUAGE_NAMES,
@@ -50,7 +51,7 @@ log = logging.getLogger(__name__)
 AUDIO_LANGUAGES = ["English", "Yoruba", "Igbo", "Hausa"]
 ELEVENLABS_VOICES = list(VOICE_NAME_TO_ID)
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-SESSION_KEYS = ["segments", "chunk_count", "language_code", "summary_result", "summary_id", "confirmed", "audio", "translation"]
+SESSION_KEYS = ["segments", "chunk_count", "language_code", "summary_result", "summary_id", "confirmed", "audio", "translation", "qa_index", "qa_answer"]
 
 @dataclass
 class DocumentContext:
@@ -202,6 +203,53 @@ def synthesize(text: str, language: str, voice: str):
         return synthesize_with_yarngpt(text, backup)
 
 
+def ask_step(ctx: DocumentContext, result) -> None:
+    """Prototype: ask the document a question. Questions and answers stay in this session only."""
+    with st.expander("Ask this document a question (prototype)", expanded=bool(st.session_state.get("qa_answer"))):
+        st.caption("Answers come only from this document, with the passages they're based on. Your question is never stored.")
+        with st.form("ask_form"):
+            language = st.selectbox("Question language", AUDIO_LANGUAGES, key="qa_language")
+            question = st.text_area("Your question", max_chars=1000, key="qa_question")
+            asked = st.form_submit_button("Ask")
+
+        if asked:
+            st.session_state.pop("qa_answer", None)
+            with st.spinner("Searching the document..."):
+                try:
+                    if "qa_index" not in st.session_state:
+                        st.session_state.qa_index = build_index(result.chunks, result.vectors)
+                    answer = answer_question(question, st.session_state.qa_index, language)
+                except QuestionError as e:
+                    st.error(f"Couldn't answer: {e}")
+                    log.warning("Question failed: %s", e)
+                    ctx.log(False, "question", event_type="question", audio_language=language)
+                    return
+            ctx.log(True, event_type="question", audio_language=language, question_answered=answer.found)
+            st.session_state.qa_answer = {"answer": answer, "language": language}
+
+        stored = st.session_state.get("qa_answer")
+        if not stored:
+            return
+        answer, language = stored["answer"], stored["language"]
+        (st.success if answer.found else st.info)(answer.text)
+        if answer.found and language != "English":
+            st.caption(f"In English: {answer.english_text}")
+            st.caption("Machine translation. Check important details against the original document.")
+        for passage in answer.cited:
+            with st.expander(f"Source: {passage.chunk.location_label}"):
+                st.caption(passage.chunk.text)
+
+        voices = ELEVENLABS_VOICES if language == "English" else yarngpt_voice_options(language)
+        if st.button("Listen to the answer"):
+            with st.spinner("Generating audio..."):
+                try:
+                    audio_bytes, ext, _ = synthesize(answer.text, language, voices[0])
+                except (YarnGPTError, ElevenLabsTTSError, requests.RequestException, ValueError) as e:
+                    st.error(f"Audio generation failed: {e}")
+                    return
+            st.audio(audio_bytes, format="audio/mpeg" if ext == "mp3" else "audio/wav")
+
+
 def listen_step(ctx: DocumentContext, result) -> None:
     st.subheader("4. Translate and listen")
     language = st.selectbox("Language", AUDIO_LANGUAGES)
@@ -316,6 +364,7 @@ def main() -> None:
         return
     result = st.session_state.summary_result
     review_step(ctx, result)
+    ask_step(ctx, result)
 
     st.subheader("3. Happy with this summary?")
     confirmed = st.checkbox(

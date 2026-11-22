@@ -6,6 +6,7 @@ POST embed_endpoint            bge-m3 passage embeddings (multilingual)
 POST summarize_endpoint        passage-constrained rewrite of one passage
 POST summarize_batch_endpoint  the same rewrite for many passages, generated as a batch
 POST translate_endpoint        translation
+POST answer_endpoint           grounded answer to a question from given passages (prototype)
 
 The language model is Llama-3.1-8B-Instruct in bfloat16 (~16 GB, fits the A10G's 24 GB).
 
@@ -39,6 +40,14 @@ TRANSLATION_SYSTEM_PROMPT = (
     "into {language}. Preserve the original meaning exactly — do not "
     "summarize, expand, or add commentary. Respond with ONLY the "
     "translated text, nothing else."
+)
+
+ANSWER_SYSTEM_PROMPT = (
+    "You answer questions using ONLY the numbered passages below, which come from one document. "
+    "If the passages do not contain the answer, reply with exactly NOT_FOUND and nothing else. "
+    "Otherwise answer in 1-3 short, plain English sentences and put the number of each passage "
+    "you used in square brackets after the sentence it supports, for example [2]. "
+    "Do not use outside knowledge, do not guess, and do not mention 'the passages'."
 )
 
 app = modal.App("kawe")
@@ -87,6 +96,16 @@ class SummarizeBatchRequest(BaseModel):
 
 class SummarizeBatchResponse(BaseModel):
     summaries: List[str]
+
+
+class AnswerRequest(BaseModel):
+    question: str
+    passages: List[str]
+    max_new_tokens: int = 200
+
+
+class AnswerResponse(BaseModel):
+    answer: str
 
 
 class TranslateRequest(BaseModel):
@@ -191,6 +210,20 @@ class Inference:
     @modal.method()
     def translate(self, text: str, target_language: str, max_new_tokens: int = 512) -> str:
         return self._generate(TRANSLATION_SYSTEM_PROMPT.format(language=target_language), [text], max_new_tokens)[0]
+
+    @modal.method()
+    def answer(self, question: str, passages: List[str], max_new_tokens: int = 200) -> str:
+        numbered = "\n\n".join(f"[{i}] {p}" for i, p in enumerate(passages, start=1))
+        prompt = f"Passages:\n{numbered}\n\nQuestion: {question}"
+        return self._generate(ANSWER_SYSTEM_PROMPT, [prompt], max_new_tokens)[0]
+
+    @modal.fastapi_endpoint(method="POST")
+    def answer_endpoint(self, request: AnswerRequest, authorization: str = Header(None)):
+        from kawe.limits import check_answer
+
+        _authorize(authorization)
+        _validate(check_answer, request.question, request.passages, request.max_new_tokens)
+        return AnswerResponse(answer=self.answer.local(request.question, request.passages, request.max_new_tokens))
 
     @modal.fastapi_endpoint(method="POST")
     def embed_endpoint(self, request: EmbedRequest, authorization: str = Header(None)):
