@@ -87,3 +87,7 @@ GitHub Actions runs the same tests on every push (`.github/workflows/tests.yml`)
 ## Evaluation
 
 See `eval/README.md`.
+
+## License
+
+MIT; see `LICENSE`. The models it calls have their own licences: Llama 3.1 is under the Llama 3.1 Community License, BGE-M3 under MIT, and ElevenLabs and YarnGPT under their providers' terms.

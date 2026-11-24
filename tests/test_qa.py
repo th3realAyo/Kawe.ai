@@ -56,6 +56,33 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(built.vectors.shape, (1, 2))
 
 
+class HybridRetrievalTests(unittest.TestCase):
+    def test_keywords_pick_the_answer_when_embeddings_are_flat(self):
+        texts = [
+            "The introduction describes penalty shootouts in general.",
+            "Related studies of shootouts in domestic cups.",
+            "We find no first-mover advantage: the team kicking first does not win more often.",
+            "Team strength from Elo ratings predicts shootout winners.",
+        ]
+        chunks = [Chunk(t, f"Page {i + 1}", i, i) for i, t in enumerate(texts)]
+        flat = np.full((4, 4), 0.5) + np.eye(4) * 0.01  # every passage looks equally on-topic
+        flat /= np.linalg.norm(flat, axis=1, keepdims=True)
+        idx = build_index(chunks, flat.tolist())
+        question_vector = flat[0]  # embeddings alone would rank the introduction first
+        found = retrieve(idx, question_vector, "Does the team that kicks first win more often?", top_k=1)
+        self.assertEqual(found[0].chunk.location_label, "Page 3")
+
+    def test_keywords_cannot_rescue_off_topic_questions(self):
+        found = retrieve(index(), AXES[3], "maize fuel fees")
+        self.assertEqual(found, [])
+
+    def test_stemming_matches_word_forms(self):
+        from kawe.qa import tokenize
+
+        self.assertEqual(tokenize("kicks kicking kicked"), ["kick", "kick", "kick"])
+        self.assertNotIn("the", tokenize("the team"))
+
+
 class ParseTests(unittest.TestCase):
     def setUp(self):
         self.retrieved = retrieve(index(), np.array([0.6, 0.6, 0.5, 0.0]))
